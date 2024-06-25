@@ -1,3 +1,4 @@
 /playground/.env
 .swp
 /rag-model/.env
+rag-model-v1/.env
