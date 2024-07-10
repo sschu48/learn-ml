@@ -28,13 +28,13 @@ def init_pinecone():
 
     # check if index already exists
     if index_name not in pc.list_indexes().names():
-    # if does not exist, create index
-    pc.create_index(
-        index_name,
-        dimension=768,
-        metric="cosine",
-        spec=spec,
-    )
+        # if does not exist, create index
+        pc.create_index(
+            index_name,
+            dimension=768,
+            metric="cosine",
+            spec=spec,
+        )
     #connect to index
     index = pc.Index(index_name)
     return index
@@ -48,10 +48,69 @@ def init_embedding_model():
 
     return embedding_model
 
+def retrieve(query, embedding_model, index):
+    res = embedding_model.encode(query)
+    xq = res.tolist()
+    res = index.query(vector=xq, top_k=2, include_metadata=True)
+    contexts = [
+        x['metadata']['text'] for x in res['matches']
+    ]
+
+    limit = 3750
+
+    # build prompt with the retrieved context included
+    prompt_start = (
+        "Answer the question based on the context below. \n\n"+
+        "Context: \n"
+    )
+    prompt_end = (
+        f"\n\nQuestion: {query}\nAnswer:"
+    )
+    # append context until hitting limit
+    for i in range(1, len(contexts)):
+        if len("\n\n---\n\n".join(contexts[:i])) >= limit:
+            prompt = (
+                prompt_start + 
+                "\n\n---\n\n".join(contexts[:i]) +
+                prompt_end
+            )
+            break
+        elif i == len(contexts)-1:
+            prompt = (
+                prompt_start + 
+                "\n\n---\n\n".join(contexts) + 
+                prompt_end
+            )
+    return prompt
+
 # init llm
 @st.cache_resource
 def init_llm():
     return OpenAI()
+
+# generate answer
+def generate_answer(prompt):
+    client = init_llm()
+
+    query = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": prompt}
+    ]
+
+    completion = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=query
+    )
+
+    return completion.choices[0].message.content
+
+
+# Connect to Pinecone
+index = init_pinecone()
+pinecone_stats = str(index.describe_index_stats()) # view index stats
+
+# Initialize embedding model
+embedding_model = init_embedding_model()
 
 # Input for context
 context = st.text_area("Enter context here: ", height=200)
@@ -60,9 +119,10 @@ context = st.text_area("Enter context here: ", height=200)
 question = st.text_input("Enter your question: ")
 
 if st.button("Get Answer"): 
-    if context and question: 
+    if question: 
         with st.spinner("Thinking..."):
-            result = "Context: " + context + "\n" + "Question: " + question
+            prompt = retrieve(question, embedding_model, index)
+            result = generate_answer(prompt)
 
         st.success("Here is your result: ")
         st.write(result)
@@ -74,6 +134,7 @@ st.sidebar.header("About")
 st.sidebar.info(
     "This application is under development"
 )
+st.sidebar.info(pinecone_stats)
 
 # Add footer
 st.sidebar.markdown("---")
